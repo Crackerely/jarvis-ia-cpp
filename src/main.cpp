@@ -1,4 +1,4 @@
-#include "include/assistant_core.h"
+#include "assistant_core.h"
 #include <iostream>
 
 int main() {
@@ -6,7 +6,7 @@ int main() {
     AssistantCore assistant;
     
     // Prueba rápida de síntesis de voz nativa desde C++
-    assistant.speakText("Núcleo de C plus plus cargado exitosamente.", "es");
+    assistant.speak("Núcleo de C plus plus cargado exitosamente.", "es");
     
     return 0;
 }

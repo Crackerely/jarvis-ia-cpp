@@ -1,18 +1,34 @@
 CXX = g++
-CXXFLAGS = -std=c++17 -O3 -Wall -Wextra -Iinclude -fPIC $(shell python3 -m pybind11 --includes) $(shell pkg-config --cflags opencv4 2>/dev/null || pkg-config --cflags opencv)
-LDFLAGS = -lportaudio -lctranslate2 $(shell pkg-config --libs opencv4 2>/dev/null || pkg-config --libs opencv)
+CXXFLAGS = -std=c++17 -O3 -Wall -Wextra -Iinclude -fPIC $(shell python3 -m pybind11 --includes)
+LDFLAGS = -lportaudio -lctranslate2 -lcurl -lespeak-ng
 
-SRCS = assistant_core.cpp jarvis_voice.cpp jarvis_ffmpeg.cpp jarvis_opencv.cpp jarvis_melo.cpp jarvis_whisper.cpp python_bindings.cpp
-OBJS = $(SRCS:.cpp=.o)
-TARGET = jarvis.so
+SRC_DIR = src
+INCLUDE_DIR = include
+BUILD_DIR = builds
 
-all: $(TARGET)
+# Obtiene todos los headers automáticamente por si integras nuevos a futuro
+HEADERS = $(wildcard $(INCLUDE_DIR)/*.h)
 
-$(TARGET): $(OBJS)
-	$(CXX) -shared $(OBJS) -o $(TARGET) $(LDFLAGS)
+# Obtiene dinámicamente todos los .cpp de src/ (incluyendo assistant_core.cpp, jarvis_state.cpp, python_bindings.cpp, etc.)
+ALL_SRCS = $(wildcard $(SRC_DIR)/*.cpp)
 
-%.o: %.cpp
+# Genera los objetos a partir de todos los archivos fuente encontrados en src/
+OBJS = $(patsubst $(SRC_DIR)/%.cpp, $(BUILD_DIR)/%.o, $(ALL_SRCS))
+
+TARGET_SO = jarvis.so
+
+all: $(BUILD_DIR) $(TARGET_SO)
+
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+# Regla para compilar la librería compartida de Python (jarvis.so)
+$(TARGET_SO): $(OBJS)
+	$(CXX) -shared $(OBJS) -o $(TARGET_SO) $(LDFLAGS)
+
+# Regla genérica para compilar .cpp a .o (recompila automáticamente si cambia algún header .h)
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp $(HEADERS) | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(OBJS) $(TARGET)
+	rm -rf $(BUILD_DIR) $(TARGET_SO)

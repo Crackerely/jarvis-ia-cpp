@@ -1,3 +1,4 @@
+#!/usr/bin/python3
 import json
 import jarvis
 
@@ -10,7 +11,7 @@ print("[INFO] Jarvis C++ Core iniciado con sockets nativos y FFmpeg streams.")
 def hum_thinking(lang):
   """Feedback visual y auditivo de que Jarvis está procesando."""
   hum_text = (
-      "estoy en eso maldita puta dame tiempo mi cerebro es lento"
+      "estoy en eso mi negrito, dame tiempo mi cerebro es lento"
       if lang.startswith("es")
       else "working on it"
   )

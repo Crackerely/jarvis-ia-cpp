@@ -1,0 +1,7 @@
+nixos.dockerfile
+pods.sh
+*.o
+*.so
+jarvis_core
+.venv
+*.log

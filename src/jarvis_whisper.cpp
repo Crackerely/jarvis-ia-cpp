@@ -1,4 +1,4 @@
-#include "include/jarvis_whisper.h"
+#include "jarvis_whisper.h"
 #include <iostream>
 #include <fstream>
 #include <stdexcept>
@@ -14,6 +14,7 @@ JarvisWhisper::JarvisWhisper(const std::string& model_size, const std::string& d
 JarvisWhisper::~JarvisWhisper() = default;
 
 std::pair<std::vector<WhisperSegment>, WhisperInfo> JarvisWhisper::transcribe(const std::string& audio_path, int beam_size) {
+    (void)beam_size;
     std::vector<WhisperSegment> segments;
     WhisperInfo info;
     info.language = "es"; // Idioma por defecto o detectado por el motor

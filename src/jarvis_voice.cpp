@@ -1,4 +1,4 @@
-#include "include/jarvis_voice.h"
+#include "jarvis_voice.h"
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -8,15 +8,18 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/wait.h>
-#include <netdb.h>
-#include <arpa/inet.h>
+#include <signal.h>
 #include <termios.h>
 #include <fcntl.h>
 #include <portaudio.h>
+#include <curl/curl.h>
 
-// En el constructor JarvisVoice::JarvisVoice() inicializamos el PID:
+static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
+    ((std::string*)userp)->append((char*)contents, size * nmemb);
+    return size * nmemb;
+}
+
 JarvisVoice::JarvisVoice() : active_speech_pid(-1) {
-    // Silenciar errores molestos de ALSA/JACK en la terminal
     int old_stderr = dup(STDERR_FILENO);
     int devnull = open("/dev/null", O_WRONLY);
     if (devnull != -1) {
@@ -25,15 +28,14 @@ JarvisVoice::JarvisVoice() : active_speech_pid(-1) {
     }
 
     Pa_Initialize();
+    curl_global_init(CURL_GLOBAL_DEFAULT);
 
-    // Restaurar stderr
     if (old_stderr != -1) {
         dup2(old_stderr, STDERR_FILENO);
         close(old_stderr);
     }
 }
 
-// Implementación del método de la clase para detener voz de forma segura
 void JarvisVoice::stopActiveSpeech() {
     if (active_speech_pid > 0) {
         kill(active_speech_pid, SIGKILL);
@@ -42,6 +44,7 @@ void JarvisVoice::stopActiveSpeech() {
 }
 
 JarvisVoice::~JarvisVoice() {
+    curl_global_cleanup();
     Pa_Terminate();
 }
 
@@ -49,50 +52,30 @@ int JarvisVoice::executeProcess(const std::string& cmd) {
     return std::system(cmd.c_str());
 }
 
-std::string JarvisVoice::httpPostOllama(const std::string& host, int port, const std::string& endpoint, const std::string& jsonData) {
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) return "";
+std::string JarvisVoice::httpPostOllama(const std::string& url, const std::string& jsonData) {
+    CURL* curl = curl_easy_init();
+    std::string readBuffer;
 
-    struct hostent* server = gethostbyname(host.c_str());
-    if (!server) {
-        close(sock);
-        return "";
+    if (!curl) return "";
+
+    struct curl_slist* headers = NULL;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, jsonData.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
+
+    CURLcode res = curl_easy_perform(curl);
+    if (res != CURLE_OK) {
+        std::cerr << "[JarvisVoice ERROR] curl_easy_perform failed: " << curl_easy_strerror(res) << std::endl;
     }
 
-    struct sockaddr_in serv_addr{};
-    serv_addr.sin_family = AF_INET;
-    std::memcpy(&serv_addr.sin_addr.s_addr, server->h_addr, server->h_length);
-    serv_addr.sin_port = htons(port);
+    curl_easy_cleanup(curl);
+    curl_slist_free_all(headers);
 
-    if (connect(sock, reinterpret_cast<struct sockaddr*>(&serv_addr), sizeof(serv_addr)) < 0) {
-        close(sock);
-        return "";
-    }
-
-    std::string request = "POST " + endpoint + " HTTP/1.1\r\n" +
-                          "Host: " + host + "\r\n" +
-                          "Content-Type: application/json\r\n" +
-                          "Content-Length: " + std::to_string(jsonData.size()) + "\r\n" +
-                          "Connection: close\r\n\r\n" +
-                          jsonData;
-
-    send(sock, request.c_str(), request.size(), 0);
-
-    std::string response = "";
-    char buffer[4096];
-    int bytesReceived = 0;
-    while ((bytesReceived = recv(sock, buffer, sizeof(buffer) - 1, 0)) > 0) {
-        buffer[bytesReceived] = '\0';
-        response += buffer;
-    }
-
-    close(sock);
-
-    size_t pos = response.find("\r\n\r\n");
-    if (pos != std::string::npos) {
-        return response.substr(pos + 4);
-    }
-    return response;
+    return readBuffer;
 }
 
 bool JarvisVoice::streamAudioWithFFmpeg(const std::string& inputSource) {
@@ -104,7 +87,7 @@ bool JarvisVoice::sendMpvCommand(const std::string& socketPath, const std::strin
     int sock = socket(AF_UNIX, SOCK_STREAM, 0);
     if (sock < 0) return false;
 
-    sockaddr_un addr{};
+    struct sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
     std::strncpy(addr.sun_path, socketPath.c_str(), sizeof(addr.sun_path) - 1);
 
