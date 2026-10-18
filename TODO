@@ -1,3 +1,4 @@
 # TODO:
-.- terminar de enlazar jarvis_whisper y jarvis_voice para poder integrar TTS y comandos de voz.
-...
+.- terminar de enlazar jarvis_whisper y jarvis_voice para poder integrar TTS y comandos de voz
+.- generar sesión shell con variable definida: export LD_LIBRARY_PATH=/usr/local/lib
+.- realizar fix para jarvis_listener.h / jarvis_listener.cpp

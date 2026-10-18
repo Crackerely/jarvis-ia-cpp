@@ -1,4 +1,5 @@
 #include <pybind11/pybind11.h>
+#include <pybind11/functional.h> // Necesario para mapear std::function <-> callables de Python. . .
 #include <pybind11/stl.h>
 #include "assistant_core.h"
 #include "jarvis_whisper.h"
@@ -6,7 +7,7 @@
 namespace py = pybind11;
 
 PYBIND11_MODULE(jarvis, m) {
-    m.doc() = "Jarvis C++ Core API con CTranslate2 y libcurl nativo";
+    m.doc() = "Jarvis C++ Core API con CTranslate2, FFmpeg y libcurl nativo";
 
     py::class_<WhisperSegment>(m, "WhisperSegment")
         .def_readwrite("text", &WhisperSegment::text);
@@ -27,5 +28,7 @@ PYBIND11_MODULE(jarvis, m) {
         .def("query_ollama", &AssistantCore::queryOllama)
         .def("query_ollama_intent", &AssistantCore::queryOllamaIntent)
         .def("record_and_save_wav", &AssistantCore::recordAndSaveWav)
-        .def("play_youtube_music", &AssistantCore::playYouTubeMusic);
+        .def("play_youtube_music", &AssistantCore::playYouTubeMusic)
+        .def("start_listening", &AssistantCore::startListening)
+        .def("stop_listening", &AssistantCore::stopListening);
 }

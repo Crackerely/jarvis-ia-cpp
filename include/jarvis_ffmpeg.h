@@ -2,28 +2,23 @@
 #define JARVIS_FFMPEG_H
 
 #include <string>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-// Bloque extern "C" para integración nativa de yt-dlp accesible desde C y C++
-bool ytdlp_get_stream_url(const char* query, char* output_buffer, int max_len);
-
-#ifdef __cplusplus
-}
-#endif
+#include <vector>
+#include <cstdint>
+#include "memory_player.h"
 
 class JarvisFFmpeg {
+private:
+    MemoryMusicPlayer memoryPlayer;
+
 public:
     JarvisFFmpeg();
     ~JarvisFFmpeg();
 
-    // Reproduce audio en streaming mediante FFmpeg
+    std::string getDirectStreamUrl(const std::string& searchQuery);
     bool streamAudio(const std::string& url);
 
-    // Obtiene la URL directa de reproducción usando el helper en C de yt-dlp
-    std::string getDirectStreamUrl(const std::string& searchQuery);
+    // Método nativo utilizando libavformat para exportar PCM a WAV sin popen ni cabeceras manuales
+    bool savePcmToWav(const std::vector<int16_t>& pcmData, const std::string& filename, int sampleRate = 16000);
 };
 
-#endif
+#endif // JARVIS_FFMPEG_H

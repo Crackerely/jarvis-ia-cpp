@@ -1,7 +1,8 @@
-nixos.dockerfile
+*.dockerfile
 pods.sh
 *.o
 *.so
 jarvis_core
 .venv
 *.log
+*.old*

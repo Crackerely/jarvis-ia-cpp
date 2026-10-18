@@ -1,7 +1,9 @@
 CXX = g++
-CXXFLAGS = -std=c++17 -O3 -Wall -Wextra -Iinclude -fPIC $(shell python3 -m pybind11 --includes)
-LDFLAGS = -lportaudio -lctranslate2 -lcurl -lespeak-ng
+CXXFLAGS = -std=c++17 -O3 -Wall -Wextra -Iinclude -g -fPIC \
+           $(shell python3 -m pybind11 --includes) \
+           $(shell pkg-config --cflags json-c libcurl libavformat libavcodec libavutil libswresample portaudio-2.0)
 
+LDFLAGS = $(shell pkg-config --libs json-c libcurl libavformat libavcodec libavutil libswresample portaudio-2.0) -lctranslate2 -lespeak-ng
 SRC_DIR = src
 INCLUDE_DIR = include
 BUILD_DIR = builds

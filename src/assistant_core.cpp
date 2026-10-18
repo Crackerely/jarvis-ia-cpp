@@ -4,10 +4,49 @@
 #include <sstream>
 #include <cstdlib>
 
-AssistantCore::AssistantCore() {}
-AssistantCore::~AssistantCore() {}
+static std::string escapeJsonString(const std::string& input) {
+    std::string output = "";
+    for (char c : input) {
+        switch (c) {
+            case '\"':
+                output += "\\\"";
+                break;
+            case '\\':
+                output += "\\\\";
+                break;
+            case '\b':
+                output += "\\b";
+                break;
+            case '\f':
+                output += "\\f";
+                break;
+            case '\n':
+                output += "\\n";
+                break;
+            case '\r':
+                output += "\\r";
+                break;
+            case '\t':
+                output += "\\t";
+                break;
+            default:
+                output += c;
+                break;
+        }
+    }
+    return output;
+}
+
+AssistantCore::AssistantCore() {
+    std::cout << "[AssistantCore] Inicializando núcleo asistente..." << std::endl;
+}
+
+AssistantCore::~AssistantCore() {
+    std::cout << "[AssistantCore] Finalizando núcleo asistente..." << std::endl;
+}
 
 void AssistantCore::speak(const std::string& text, const std::string& lang) {
+    // Delegación limpia al estado global centralizado
     state.synthesizeText(text, lang);
 }
 
@@ -28,23 +67,43 @@ char AssistantCore::checkKey() {
 }
 
 std::string AssistantCore::queryOllama(const std::string& prompt) {
-    std::string cleanPrompt = prompt;
-    size_t pos = 0;
-    while ((pos = cleanPrompt.find("\"", pos)) != std::string::npos) {
-        cleanPrompt.replace(pos, 1, "\\\"");
-        pos += 2;
-    }
+    std::string cleanPrompt = escapeJsonString(prompt);
     std::string jsonData = "{\"model\": \"llama3.2\", \"prompt\": \"" + cleanPrompt + "\", \"stream\": false}";
     return state.voice.httpPostOllama("http://127.0.0.1:11434/api/generate", jsonData);
 }
 
+std::string AssistantCore::loadQueryPrompt(const std::string& filepath) {
+    std::ifstream file(filepath);
+    if (!file.is_open()) {
+        std::cerr << "[AssistantCore ERROR] No se pudo abrir el archivo de prompt: " << filepath << std::endl;
+        return "";
+    }
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
+}
+
 std::string AssistantCore::queryOllamaIntent(const std::string& userText) {
-    std::string systemPrompt = "You are a bilingual smart home assistant intent router. Analyze user input.\n"
-                               "1. Control music -> {\"action\": \"control_playback\", \"command\": \"stop|pause|resume\"}\n"
-                               "2. Play music -> {\"action\": \"play_music\", \"song\": \"song and artist\"}\n"
-                               "3. Chat -> {\"action\": \"chat\"}\nOutput ONLY valid JSON.";
+    // Cargar el prompt dinámicamente desde el archivo de texto
+    std::string systemPrompt = loadQueryPrompt("queryprompt.txt");
+    
+    // Fallback de seguridad por si el archivo no existe o está vacío
+    if (systemPrompt.empty()) {
+        // systemPrompt = "You are a bilingual smart home assistant intent router. Output ONLY valid JSON.";
+        std::cerr << "[AssistantCore ERROR] No se pudo cargar el FILE-STREAM del prompt (queryprompt.txt)." << std::endl;
+        return nullptr;
+    }
+
+    std::string cleanUserText = userText;
+    size_t pos = 0;
+    while ((pos = cleanUserText.find("\"", pos)) != std::string::npos) {
+        cleanUserText.replace(pos, 1, "\\\"");
+        pos += 2;
+    }
+
     std::string fullPrompt = systemPrompt + "\nUser: " + userText + "\nJSON:";
-    std::string jsonData = "{\"model\": \"llama3.2\", \"prompt\": \"" + fullPrompt + "\", \"stream\": false, \"format\": \"json\"}";
+    std::string cleanPrompt = escapeJsonString(fullPrompt);
+    std::string jsonData = "{\"model\": \"llama3.2\", \"prompt\": \"" + cleanPrompt + "\", \"stream\": false, \"format\": \"json\"}";
     return state.voice.httpPostOllama("http://127.0.0.1:11434/api/generate", jsonData);
 }
 
@@ -68,8 +127,16 @@ bool AssistantCore::playYouTubeMusic(const std::string& query) {
     std::cout << "[AssistantCore] Consultando stream para: " << query << std::endl;
     std::string directUrl = state.ffmpeg.getDirectStreamUrl(query);
     if (directUrl.empty()) {
-        std::cerr << "[AssistantCore ERROR] No se pudo obtener la URL." << std::endl;
+        std::cerr << "[AssistantCore ERROR] No se pudo obtener la URL de streaming." << std::endl;
         return false;
     }
     return state.ffmpeg.streamAudio(directUrl);
+}
+
+void AssistantCore::startListening(std::function<void(const std::string&)> callback) {
+    state.startListening(callback);
+}
+
+void AssistantCore::stopListening() {
+    state.stopListening();
 }
