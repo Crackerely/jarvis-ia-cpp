@@ -30,6 +30,7 @@ public:
     std::string getCurrentSongArtist();
     double getCurrentSongProgress();
     double getCurrentSongDuration();
+    bool controlMusic(const std::string& command); // "stop", "pause", "resume"
     int getQueueSize();
 };
 

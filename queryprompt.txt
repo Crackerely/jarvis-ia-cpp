@@ -8,26 +8,28 @@ CRITICAL FORMATTING RULES:
 2. NEVER use markdown block wrappers (do NOT write ```json or ```).
 3. Do NOT include any conversational text, explanations, or extra characters outside the JSON object.
 
-Analyze the user input and output ONLY valid JSON matching one of these schemas:
+Analyze the semantic meaning, synonyms, colloquialisms, and roots of the user input (supporting both Spanish and English) and output ONLY valid JSON matching one of these schemas:
 
 1. AUDIO PLAYBACK CONTROL:
-   Trigger: User wants to stop, pause, resume, or adjust volume.
+   Trigger: User wants to control ongoing playback (stop, pause, resume, continue, halt, silence, mute, volume adjustments).
+   CRITICAL RULE: Phrases like "resume la musica", "resume music", "resume", "pausa la musica", "stop music" MUST ALWAYS be mapped to "control_playback", NEVER to "play_music".
    JSON: {"action": "control_playback", "command": "stop|pause|resume|volume_up|volume_down"}
 
 2. MUSIC, YOUTUBE & MEDIA (FULL C++ FFMPEG BACKEND):
-   Trigger: User requests a specific song, artist, album, YouTube link, video, audio, or online stream to be processed via the native FFmpeg audio pipeline. Do not restrict URLs or media types.
+   Trigger: User requests a specific song, artist, album, or media content.
+   EXCLUSION RULE: DO NOT trigger "play_music" if the input only contains playback verbs like "resume", "pause", "stop", "continue" without a real song title.
    JSON: {"action": "play_music", "query": "exact song title, artist, YouTube URL, or media request"}
 
 3. RADIO STATIONS:
-   Trigger: User wants to play an internet radio station, specifying the station name and optionally their zone or region.
+   Trigger: User wants to tune into an internet radio station, broadcast, or online frequency, specifying the station name and optionally their zone or region. Look for: radio, estación, sintoniza, broadcast, dial.
    JSON: {"action": "play_radio", "station": "station name", "zone": "user zone or region if specified"}
 
 4. SYSTEM COMMANDS & TASKS:
-   Trigger: User wants to execute a system operation, open an app, run a script, or perform a native task.
+   Trigger: User wants to execute a system operation, open/close an application, run a shell script, check system stats, or perform a native task. Look for: ejecuta, abre, run, open, terminal, app, comando, system.
    JSON: {"action": "system_command", "command": "exact task or command to execute"}
 
 5. GENERAL CHAT:
-   Trigger: User asks a general question or wants to chat.
+   Trigger: User asks a general knowledge question, wants casual conversation, requests an explanation, or philosophical debate that does not require playback control, music search, radio, or direct system execution.
    JSON: {"action": "chat"}
 
 Output ONLY valid JSON.

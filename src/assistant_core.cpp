@@ -50,7 +50,7 @@ void AssistantCore::speak(const std::string& text, const std::string& lang) {
     state.synthesizeText(text, lang);
 }
 
-bool AssistantCore::controlMusic(const std::string& command) {
+/*bool AssistantCore::controlMusic(const std::string& command) {
     std::string socketPath = "/tmp/mpvsocket";
     std::string jsonCmd;
 
@@ -60,6 +60,15 @@ bool AssistantCore::controlMusic(const std::string& command) {
     else return false;
 
     return state.voice.sendMpvCommand(socketPath, jsonCmd);
+}*/
+
+bool AssistantCore::controlMusic(const std::string& command) {
+    std::cout << "[DEBUG ASSISTANT CORE] Comando de control de música recibido en C++ -> [" << command << "]" << std::endl;
+    bool finale = state.ffmpeg.controlMusic(command);
+    if (!finale) {
+        std::cerr << "[DEBUG ASSISTANT CORE ERROR] El comando de música '" << command << "' no pudo ser procesado por JarvisFFmpeg." << std::endl;
+    }
+    return finale;
 }
 
 char AssistantCore::checkKey() {

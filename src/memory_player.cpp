@@ -13,7 +13,7 @@ extern "C" {
 
 MemoryMusicPlayer::MemoryMusicPlayer() 
     : head_(nullptr), tail_(nullptr), currentSong_(nullptr),
-      isRunning_(true), isPlayingCurrent_(false), abortCurrent_(false), currentProgressSeconds_(0.0) {
+      isRunning_(true), isPlayingCurrent_(false), isPaused_(false), abortCurrent_(false), currentProgressSeconds_(0.0) {
     playerThread_ = std::thread(&MemoryMusicPlayer::playerLoop, this);
 }
 
@@ -38,6 +38,19 @@ void MemoryMusicPlayer::stop() {
         current = next;
     }
     head_ = tail_ = currentSong_ = nullptr;
+}
+
+void MemoryMusicPlayer::pause() {
+    std::lock_guard<std::mutex> lock(queueMtx_);
+    std::cout << "[DEBUG MEMORY PLAYER] Pausando reproducción actual..." << std::endl;
+    isPaused_ = true;
+}
+
+void MemoryMusicPlayer::resume() {
+    std::lock_guard<std::mutex> lock(queueMtx_);
+    std::cout << "[DEBUG MEMORY PLAYER] Reanudando reproducción..." << std::endl;
+    isPaused_ = false;
+    queueCv_.notify_all();
 }
 
 void MemoryMusicPlayer::addSong(const std::string& title, const std::string& artist, const std::string& url, double duration) {
@@ -288,6 +301,17 @@ bool MemoryMusicPlayer::playStreamInternal(SongNode* song) {
             int ret = avcodec_send_packet(codecCtx, pkt);
             if (ret >= 0) {
                 while (isRunning_ && !abortCurrent_ && avcodec_receive_frame(codecCtx, frame) >= 0) {
+                    
+                    // Bloque seguro con unique_lock para la pausa
+                    {
+                        std::unique_lock<std::mutex> pauseLock(queueMtx_);
+                        while (isPaused_ && isRunning_ && !abortCurrent_) {
+                            queueCv_.wait_for(pauseLock, std::chrono::milliseconds(100));
+                        }
+                    }
+
+                    if (abortCurrent_ || !isRunning_) break;
+
                     int outLinesize = 0;
                     uint8_t* outBuffer = nullptr;
                     int maxDstSamples = av_rescale_rnd(swr_get_delay(swrCtx, sampleRate) + frame->nb_samples, sampleRate, sampleRate, AV_ROUND_UP);

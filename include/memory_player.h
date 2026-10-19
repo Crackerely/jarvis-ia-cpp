@@ -77,6 +77,8 @@ public:
     void addSong(const std::string& title, const std::string& artist, const std::string& url, double duration);
     void playNow(const std::string& title, const std::string& artist, const std::string& url, double duration);
     void stop();
+    void pause();
+    void resume();
     
     bool isPlayingOrQueued();
 
@@ -98,6 +100,7 @@ private:
     std::condition_variable queueCv_;
     std::atomic<bool> isRunning_;
     std::atomic<bool> isPlayingCurrent_;
+    std::atomic<bool> isPaused_;
     std::atomic<bool> abortCurrent_;
     
     double currentProgressSeconds_; // Protegido por queueMtx_

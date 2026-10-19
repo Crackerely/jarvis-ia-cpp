@@ -122,4 +122,17 @@ std::string JarvisFFmpeg::getCurrentSongTitle() { return memoryPlayer.getCurrent
 std::string JarvisFFmpeg::getCurrentSongArtist() { return memoryPlayer.getCurrentSongArtist(); }
 double JarvisFFmpeg::getCurrentSongProgress() { return memoryPlayer.getCurrentSongProgress(); }
 double JarvisFFmpeg::getCurrentSongDuration() { return memoryPlayer.getCurrentSongDuration(); }
+bool JarvisFFmpeg::controlMusic(const std::string& command) {
+    if (command == "stop") {
+        memoryPlayer.stop();
+        return true;
+    } else if (command == "pause") {
+        memoryPlayer.pause();
+        return true;
+    } else if (command == "resume") {
+        memoryPlayer.resume();
+        return true;
+    }
+    return false;
+}
 int JarvisFFmpeg::getQueueSize() { return memoryPlayer.getQueueSize(); }

@@ -53,7 +53,8 @@ $SUDO pacman -S --needed --noconfirm \
     pybind11 \
     git \
     zstd \
-    lshw
+    lshw \
+    json-c
 
 # --- 3. DETECCIÓN DE HARDWARE (NVIDIA / CUDA) ---
 echo "[+] Detectando hardware del sistema..."

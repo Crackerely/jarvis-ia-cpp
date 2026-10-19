@@ -68,7 +68,7 @@ def process_user_command(user_text):
 
         action_payload = json.loads(intent_json_str)
         action = action_payload.get("action", "chat")
-        command = action_payload.get("command", "")
+        command = action_payload.get("command", "").lower()
         
         raw_payload = (
             action_payload.get("query", "")
@@ -77,20 +77,42 @@ def process_user_command(user_text):
             or action_payload.get("url", "")
         )
 
-        # SANITIZACIÓN DEL STRING: Limpiar comillas, apóstrofes cortados o caracteres problemáticos
         payload = raw_payload.replace("'", "").replace('"', "").strip()
 
-        print(f"\n[DEBUG INTENT]: Acción -> {action} | Payload Original -> {raw_payload} | Sanitizado -> {payload}")
+        print(f"\n[DEBUG INTENT]: Acción -> {action} | Command -> {command} | Payload -> {payload}")
 
-        if action == "play_music" and payload:
-            jarvis_core.speak("Buscando audio", lang)
+        # 1. EVALUAR CONTROL DE REPRODUCCIÓN (Evita caer en chat general)
+        if action == "control_playback" or action in ["pause_music", "resume_music", "stop_music"]:
+            if command == "pause" or action == "pause_music" or "pausa" in user_text.lower():
+                jarvis_core.speak("Pausando audio", lang)
+                jarvis_core.control_music("pause")
+            elif command == "resume" or action == "resume_music" or "reanuda" in user_text.lower() or "continua" in user_text.lower():
+                jarvis_core.speak("Reanudando audio", lang)
+                jarvis_core.control_music("resume")
+            elif command == "stop" or action == "stop_music" or "detener" in user_text.lower() or "para" in user_text.lower():
+                jarvis_core.speak("Deteniendo audio", lang)
+                jarvis_core.control_music("stop")
+            return
+
+        # 2. REPRODUCCIÓN DE MÚSICA
+        elif action == "play_music" and payload:
+            clean_payload_lower = payload.lower().strip()
             
+            # Guardrail contra comandos de control filtrados como búsqueda
+            if clean_payload_lower in ["resume", "resume music", "resume la musica", "continua", "continuar"]:
+                jarvis_core.speak("Reanudando audio", lang)
+                jarvis_core.control_music("resume")
+                return
+            elif clean_payload_lower in ["pause", "pause music", "pausa", "ponle pausa", "pausar"]:
+                jarvis_core.speak("Pausando audio", lang)
+                jarvis_core.control_music("pause")
+                return
+
+            jarvis_core.speak("Buscando audio", lang)
             direct_url = jarvis_core.find_youtube_url(payload)
             
             if direct_url:
                 jarvis_core.speak("Reproduciendo audio", lang)
-                
-                # Usamos la nueva firma con metadatos para poblar detalladamente el nodo de la LinkedList
                 jarvis_core.play_youtube_music_with_metadata(
                     title=payload,
                     artist="YouTube Stream",
@@ -100,24 +122,13 @@ def process_user_command(user_text):
             else:
                 jarvis_core.speak("No pude encontrar el audio solicitado", lang)
 
-        elif action == "stop_music":
-            jarvis_core.speak("Deteniendo audio", lang)
-            jarvis_core.control_music("stop")
-
-        elif action == "pause_music":
-            jarvis_core.speak("Pausando audio", lang)
-            jarvis_core.control_music("pause")
-
-        elif action == "resume_music":
-            jarvis_core.speak("Reanudando audio", lang)
-            jarvis_core.control_music("resume")
-
         elif command == "salir" or command == "exit":
             print("\nCancelando todo...")
             jarvis_core.control_music("stop")
             jarvis_core.stop_listening()
             sys.exit(0)
 
+        # 3. CHAT GENERAL
         else:
             raw_chat_response = jarvis_core.query_ollama(user_text)
             chat_data = json.loads(raw_chat_response)
@@ -141,6 +152,7 @@ def process_user_command(user_text):
                 jarvis_core.speak(answer, lang)
         except Exception:
             jarvis_core.speak("Error al procesar la solicitud.", lang)
+
 
 if __name__ == "__main__":
     print("\n[LISTENING...] Dilo diciendo 'Jarvis activar <comando>', presiona 'e' para texto, 's' para estado de música o 'd' para salir.")
