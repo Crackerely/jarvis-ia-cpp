@@ -4,7 +4,7 @@
 #include <string>
 #include <algorithm>
 #include <fstream>
-#include <json-c/json.h> // <--- Incluimos json-c
+#include <json-c/json.h>
 
 JarvisDownloader::JarvisDownloader() {}
 JarvisDownloader::~JarvisDownloader() {}
@@ -13,6 +13,22 @@ size_t JarvisDownloader::WriteCallback(void* contents, size_t size, size_t nmemb
     size_t totalSize = size * nmemb;
     userp->append((char*)contents, totalSize);
     return totalSize;
+}
+
+static std::string urlEncode(const std::string& str) {
+    std::string encoded = "";
+    for (char c : str) {
+        if (isalnum((unsigned char)c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            encoded += c;
+        } else if (c == ' ') {
+            encoded += '+';
+        } else {
+            char buf[4];
+            snprintf(buf, sizeof(buf), "%%%02X", (unsigned char)c);
+            encoded += buf;
+        }
+    }
+    return encoded;
 }
 
 static std::string extractVideoId(const std::string& input) {
@@ -37,52 +53,12 @@ std::string JarvisDownloader::getAudioUrl(const std::string& searchQuery) {
         return "";
     }
 
-    // 1. Búsqueda en InnerTube si no es un ID directo
     if (videoId.empty()) {
-        std::cout << "[JarvisDownloader] Buscando video en InnerTube para: " << searchQuery << std::endl;
-
-        std::string searchBuffer;
-        std::string searchPayload = "{\"context\":{\"client\":{\"clientName\":\"ANDROID\",\"clientVersion\":\"20.10.38\"}},\"query\":\"" + searchQuery + "\"}";
-
-        curl_easy_setopt(curl, CURLOPT_URL, "https://www.youtube.com/youtubei/v1/search");
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, searchPayload.c_str());
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &searchBuffer);
-
-        struct curl_slist* headers = NULL;
-        headers = curl_slist_append(headers, "Content-Type: application/json");
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-
-        CURLcode res = curl_easy_perform(curl);
-        curl_slist_free_all(headers);
-
-        if (res != CURLE_OK) {
-            std::cerr << "[JarvisDownloader ERROR] Falló la petición de búsqueda." << std::endl;
-            curl_easy_cleanup(curl);
-            return "";
-        }
-
-        struct json_object* searchRoot = json_tokener_parse(searchBuffer.c_str());
-        if (searchRoot) {
-            // Nota: Aquí también podrías navegar de forma robusta con json-c si lo deseas, 
-            // o mantener la extracción rápida del primer videoId.
-            size_t vIdPos = searchBuffer.find("\"videoId\":\"");
-            if (vIdPos != std::string::npos) {
-                videoId = searchBuffer.substr(vIdPos + 11, 11);
-            }
-            json_object_put(searchRoot);
-        }
-
-        if (videoId.empty()) {
-            std::cerr << "[JarvisDownloader ERROR] No se encontró ningún videoId para la consulta." << std::endl;
-            curl_easy_cleanup(curl);
-            return "";
-        }
+        videoId = searchQuery;
     }
 
-    std::cout << "[JarvisDownloader] Obteniendo stream de audio para videoId: " << videoId << std::endl;
+    std::cout << "[JarvisDownloader] Obteniendo stream de audio para videoId/Query: " << videoId << std::endl;
 
-    // 2. Consultar el endpoint /player de InnerTube
     std::string playerBuffer;
     std::string playerPayload = "{\"context\":{\"client\":{\"clientName\":\"ANDROID\",\"clientVersion\":\"20.10.38\",\"hl\":\"es\",\"gl\":\"MX\"}},\"videoId\":\"" + videoId + "\"}";
 
@@ -104,16 +80,6 @@ std::string JarvisDownloader::getAudioUrl(const std::string& searchQuery) {
         return "";
     }
 
-    // Guardar debug
-    {
-        std::ofstream debugFile("embed_debug.json");
-        if (debugFile.is_open()) {
-            debugFile << playerBuffer;
-            debugFile.close();
-        }
-    }
-
-    // 3. Extracción robusta mediante json-c (Adiós a las adivinanzas por subcadenas)
     struct json_object* root = json_tokener_parse(playerBuffer.c_str());
     if (!root) {
         std::cerr << "[JarvisDownloader ERROR] No se pudo parsear el JSON de respuesta de InnerTube." << std::endl;
@@ -125,7 +91,6 @@ std::string JarvisDownloader::getAudioUrl(const std::string& searchQuery) {
 
     if (json_object_object_get_ex(root, "streamingData", &streamingData)) {
         struct json_object* formats = NULL;
-        // YouTube guarda los formatos progresivos en "formats" y los adaptativos en "adaptiveFormats"
         if (json_object_object_get_ex(streamingData, "formats", &formats) && json_object_is_type(formats, json_type_array)) {
             int arrayLen = json_object_array_length(formats);
             for (int i = 0; i < arrayLen; i++) {
@@ -134,7 +99,7 @@ std::string JarvisDownloader::getAudioUrl(const std::string& searchQuery) {
                 
                 if (json_object_object_get_ex(fmt, "itag", &itagObj)) {
                     int itagVal = json_object_get_int(itagObj);
-                    if (itagVal == 18) { // Buscamos explícitamente el itag 18
+                    if (itagVal == 18) {
                         struct json_object* urlObj = NULL;
                         if (json_object_object_get_ex(fmt, "url", &urlObj)) {
                             directUrl = json_object_get_string(urlObj);
@@ -146,14 +111,55 @@ std::string JarvisDownloader::getAudioUrl(const std::string& searchQuery) {
         }
     }
 
-    // Liberar memoria principal del árbol JSON
     json_object_put(root);
+    return directUrl;
+}
 
-    if (directUrl.empty()) {
-        std::cerr << "[JarvisDownloader ERROR] No se pudo encontrar una URL válida para el itag 18 usando json-c." << std::endl;
+std::string JarvisDownloader::findUrlFromPrompt(const std::string& prompt) {
+    std::string query = prompt;
+    
+    // Si ya es una URL completa o un ID directo de 11 caracteres, lo tratamos directo
+    if (query.find("watch?v=") != std::string::npos || query.find("youtu.be/") != std::string::npos || query.length() == 11) {
+        return getAudioUrl(query);
+    }
+
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        std::cerr << "[JarvisDownloader ERROR] No fue posible inicializar cURL para la búsqueda." << std::endl;
         return "";
     }
 
-    std::cout << "[JarvisDownloader SUCCESS] URL de itag 18 extraída limpiamente con json-c." << std::endl;
-    return directUrl;
+    std::string searchBuffer;
+    std::string searchUrl = "https://www.youtube.com/results?search_query=" + urlEncode(query);
+
+    curl_easy_setopt(curl, CURLOPT_URL, searchUrl.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &searchBuffer);
+
+    struct curl_slist* headers = NULL;
+    headers = curl_slist_append(headers, "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/119.0");
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+    CURLcode res = curl_easy_perform(curl);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK) {
+        std::cerr << "[JarvisDownloader ERROR] Falló la petición de búsqueda web en YouTube." << std::endl;
+        return "";
+    }
+
+    std::string videoId = "";
+    size_t vIdPos = searchBuffer.find("\"videoId\":\"");
+    if (vIdPos != std::string::npos) {
+        videoId = searchBuffer.substr(vIdPos + 11, 11);
+    }
+
+    if (videoId.empty()) {
+        std::cerr << "[JarvisDownloader ERROR] No se encontró ningún videoId para la consulta: " << query << std::endl;
+        return "";
+    }
+
+    std::cout << "[JarvisDownloader SUCCESS] Primer resultado encontrado -> VideoId: " << videoId << std::endl;
+    return getAudioUrl(videoId);
 }

@@ -21,10 +21,21 @@ public:
     std::string queryOllamaIntent(const std::string& userText);
     void recordAndSaveWav(const std::string& filename, int seconds);
     bool playYouTubeMusic(const std::string& query);
+    bool playYouTubeMusicWithMetadata(const std::string& title, const std::string& artist, const std::string& url, double duration);
+    
+    // Declaración única del método de búsqueda
+    std::string findYouTubeUrl(const std::string& query);
+
+    // Getters de estado y progreso para la LinkedList expuestos a Python
+    std::string getCurrentSongTitle();
+    std::string getCurrentSongArtist();
+    double getCurrentSongProgress();
+    double getCurrentSongDuration();
+    int getQueueSize();
 
     // Métodos para el listener en segundo plano (Modo Alexa)
     void startListening(std::function<void(const std::string&)> callback);
     void stopListening();
 };
 
-#endif
+#endif // ASSISTANT_CORE_H

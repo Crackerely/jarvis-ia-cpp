@@ -11,6 +11,9 @@ public:
     // Recibe una URL, un ID de YouTube o una búsqueda de texto y devuelve la URL directa del stream de audio
     std::string getAudioUrl(const std::string& searchQuery);
 
+    // Busca un término en YouTube mediante InnerTube, extrae el primer resultado y lo pasa a getAudioUrl
+    std::string findUrlFromPrompt(const std::string& prompt);
+
 private:
     static size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* userp);
 };

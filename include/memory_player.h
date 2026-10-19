@@ -2,11 +2,24 @@
 #define MEMORY_PLAYER_H
 
 #include <vector>
+#include <string>
+#include <thread>
 #include <mutex>
 #include <condition_variable>
-#include <string>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
+
+struct SongNode {
+    std::string title;
+    std::string artist;
+    std::string url;
+    double durationSeconds;
+    SongNode* next;
+
+    SongNode(const std::string& t, const std::string& art, const std::string& u, double dur)
+        : title(t), artist(art), url(u), durationSeconds(dur), next(nullptr) {}
+};
 
 typedef struct AudioBuffer {
     std::vector<uint8_t> data;
@@ -15,14 +28,12 @@ typedef struct AudioBuffer {
     std::mutex mtx;
     std::condition_variable cv;
 
-    // Añade fragmentos descargados por cURL al buffer
     void append(const uint8_t* chunk, size_t size) {
         std::lock_guard<std::mutex> lock(mtx);
         data.insert(data.end(), chunk, chunk + size);
         cv.notify_all();
     }
 
-    // Lee datos del buffer de forma síncrona (espera si no hay suficientes datos)
     size_t read(uint8_t* dest, size_t size) {
         std::unique_lock<std::mutex> lock(mtx);
         cv.wait(lock, [this, size]() {
@@ -30,7 +41,7 @@ typedef struct AudioBuffer {
         });
 
         if (read_offset >= data.size() && is_finished) {
-            return 0; // Fin del archivo / Stream finalizado
+            return 0;
         }
 
         size_t available = data.size() - read_offset;
@@ -49,11 +60,10 @@ typedef struct AudioBuffer {
         cv.notify_all();
     }
 
-    // Libera la memoria reservada y restablece los estados del buffer
     void clear() {
         std::lock_guard<std::mutex> lock(mtx);
         data.clear();
-        data.shrink_to_fit(); // Libera la capacidad asignada al heap
+        data.shrink_to_fit();
         read_offset = 0;
         is_finished = false;
     }
@@ -64,11 +74,37 @@ public:
     MemoryMusicPlayer();
     ~MemoryMusicPlayer();
 
-    bool playStream(const std::string& audioUrl);
+    void addSong(const std::string& title, const std::string& artist, const std::string& url, double duration);
+    void playNow(const std::string& title, const std::string& artist, const std::string& url, double duration);
+    void stop();
+    
+    bool isPlayingOrQueued();
+
+    std::string getCurrentSongTitle();
+    std::string getCurrentSongArtist();
+    double getCurrentSongProgress();
+    double getCurrentSongDuration();
+    int getQueueSize();
 
 private:
     AudioBuffer buffer_;
     
+    SongNode* head_;
+    SongNode* tail_;
+    SongNode* currentSong_;
+
+    std::thread playerThread_;
+    std::mutex queueMtx_;
+    std::condition_variable queueCv_;
+    std::atomic<bool> isRunning_;
+    std::atomic<bool> isPlayingCurrent_;
+    std::atomic<bool> abortCurrent_;
+    
+    double currentProgressSeconds_; // Protegido por queueMtx_
+
+    void playerLoop();
+    bool playStreamInternal(SongNode* song);
+
     static size_t curlWriteCallback(void* contents, size_t size, size_t nmemb, void* userp);
     static int ffmpegReadPacket(void* opaque, uint8_t* buf, int buf_size);
 };

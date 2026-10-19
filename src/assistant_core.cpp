@@ -123,14 +123,40 @@ void AssistantCore::recordAndSaveWav(const std::string& filename, int seconds) {
     outFile.close();
 }
 
+std::string AssistantCore::findYouTubeUrl(const std::string& query) {
+    std::cout << "[AssistantCore] Buscando URL en YouTube para: " << query << std::endl;
+    return state.ffmpeg.getDirectStreamUrl(query);
+}
+
 bool AssistantCore::playYouTubeMusic(const std::string& query) {
-    std::cout << "[AssistantCore] Consultando stream para: " << query << std::endl;
-    std::string directUrl = state.ffmpeg.getDirectStreamUrl(query);
+    std::cout << "[AssistantCore] Procesando música (URL directa): " << query << std::endl;
+    std::string directUrl = query;
+    
+    if (directUrl.find("googlevideo.com") == std::string::npos && directUrl.find("watch?v=") == std::string::npos) {
+        directUrl = findYouTubeUrl(query);
+    }
+
     if (directUrl.empty()) {
         std::cerr << "[AssistantCore ERROR] No se pudo obtener la URL de streaming." << std::endl;
         return false;
     }
-    return state.ffmpeg.streamAudio(directUrl);
+    return state.ffmpeg.streamAudioFromUrl(directUrl);
+}
+
+bool AssistantCore::playYouTubeMusicWithMetadata(const std::string& title, const std::string& artist, const std::string& url, double duration) {
+    std::cout << "[AssistantCore] Añadiendo a la lista enlazada con metadatos: " << title << std::endl;
+    std::string directUrl = url;
+    
+    if (directUrl.find("googlevideo.com") == std::string::npos && directUrl.find("watch?v=") == std::string::npos) {
+        directUrl = findYouTubeUrl(url);
+    }
+
+    if (directUrl.empty()) {
+        std::cerr << "[AssistantCore ERROR] No se pudo obtener la URL de streaming con metadatos." << std::endl;
+        return false;
+    }
+
+    return state.ffmpeg.streamAudioWithMetadata(title, artist, directUrl, duration);
 }
 
 void AssistantCore::startListening(std::function<void(const std::string&)> callback) {
@@ -139,4 +165,24 @@ void AssistantCore::startListening(std::function<void(const std::string&)> callb
 
 void AssistantCore::stopListening() {
     state.stopListening();
+}
+
+std::string AssistantCore::getCurrentSongTitle() {
+    return state.ffmpeg.getCurrentSongTitle();
+}
+
+std::string AssistantCore::getCurrentSongArtist() {
+    return state.ffmpeg.getCurrentSongArtist();
+}
+
+double AssistantCore::getCurrentSongProgress() {
+    return state.ffmpeg.getCurrentSongProgress();
+}
+
+double AssistantCore::getCurrentSongDuration() {
+    return state.ffmpeg.getCurrentSongDuration();
+}
+
+int AssistantCore::getQueueSize() {
+    return state.ffmpeg.getQueueSize();
 }

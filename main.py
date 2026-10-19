@@ -4,13 +4,17 @@ import threading
 import sys
 import jarvis
 
+"""
+para revisar el log de tail jarvis_listener.*, ejecutar tail -f /tmp/jarvis_listener.log
+durante la ejecución de jarvis.
+"""
+
 # Inicializar el núcleo C++
 jarvis_core = jarvis.AssistantCore()
 
 print("[INFO] Jarvis C++ Core iniciado 100% nativo con CTranslate2, FFmpeg, e-speak y libcurl.")
 
 def hum_thinking(lang):
-    """Feedback visual y auditivo de que Jarvis está procesando."""
     hum_text = (
         "estoy en eso mi negrito, dame tiempo mi cerebro es lento"
         if lang.startswith("es")
@@ -19,22 +23,44 @@ def hum_thinking(lang):
     print(f"\n[JARVIS THINKING]: *{hum_text}*")
     jarvis_core.speak(hum_text, lang)
 
+def check_current_playback_status():
+    """Consulta el estado actual de la LinkedList y el progreso de la música"""
+    title = jarvis_core.get_current_song_title()
+    artist = jarvis_core.get_current_song_artist()
+    progress = jarvis_core.get_current_song_progress()
+    duration = jarvis_core.get_current_song_duration()
+    queue_size = jarvis_core.get_queue_size()
+
+    if title:
+        status_msg = (
+            f"Reproduciendo actualmente: {title}, de {artist}. "
+            f"Progreso: {int(progress)} segundos transcurridos. "
+            f"Hay {queue_size} canciones en espera en la cola."
+        )
+    else:
+        status_msg = "No hay ninguna canción reproduciéndose en este momento."
+    
+    print(f"\n[ESTADO DE MÚSICA]: {status_msg}")
+    jarvis_core.speak(status_msg, "es")
+
 def process_user_command(user_text):
-    """Procesa cualquier texto (proveniente de teclado o de la escucha por voz)."""
     if not user_text:
         return
 
     print(f"\n[COMANDO RECIBIDO]: {user_text}")
     lang = "es"
+
+    if "que cancion es" in user_text.lower() or "que estas reproduciendo" in user_text.lower() or "estado de la musica" in user_text.lower():
+        check_current_playback_status()
+        return
+
     hum_thinking(lang)
 
     try:
-        # 1. Analizar el intent del usuario usando el enrutador de Ollama
         raw_intent_response = jarvis_core.query_ollama_intent(user_text)
         intent_data = json.loads(raw_intent_response)
         intent_json_str = intent_data.get("response", "{}").strip()
         
-        # Limpiar posibles bloques markdown de código devueltos por el LLM
         if intent_json_str.startswith("```"):
             intent_json_str = intent_json_str.split("```")[1]
             if intent_json_str.startswith("json"):
@@ -44,29 +70,46 @@ def process_user_command(user_text):
         action = action_payload.get("action", "chat")
         command = action_payload.get("command", "")
         
-        payload = (
+        raw_payload = (
             action_payload.get("query", "")
             or action_payload.get("song", "")
             or action_payload.get("payload", "")
             or action_payload.get("url", "")
         )
 
-        print(f"\n[DEBUG INTENT]: Acción -> {action} | Payload -> {payload}")
+        # SANITIZACIÓN DEL STRING: Limpiar comillas, apóstrofes cortados o caracteres problemáticos
+        payload = raw_payload.replace("'", "").replace('"', "").strip()
+
+        print(f"\n[DEBUG INTENT]: Acción -> {action} | Payload Original -> {raw_payload} | Sanitizado -> {payload}")
 
         if action == "play_music" and payload:
-            jarvis_core.speak("Reproduciendo música", lang)
-            jarvis_core.play_youtube_music(payload)
+            jarvis_core.speak("Buscando audio", lang)
+            
+            direct_url = jarvis_core.find_youtube_url(payload)
+            
+            if direct_url:
+                jarvis_core.speak("Reproduciendo audio", lang)
+                
+                # Usamos la nueva firma con metadatos para poblar detalladamente el nodo de la LinkedList
+                jarvis_core.play_youtube_music_with_metadata(
+                    title=payload,
+                    artist="YouTube Stream",
+                    url=direct_url,
+                    duration=0.0
+                )
+            else:
+                jarvis_core.speak("No pude encontrar el audio solicitado", lang)
 
         elif action == "stop_music":
-            jarvis_core.speak("Deteniendo música", lang)
+            jarvis_core.speak("Deteniendo audio", lang)
             jarvis_core.control_music("stop")
 
         elif action == "pause_music":
-            jarvis_core.speak("Pausando música", lang)
+            jarvis_core.speak("Pausando audio", lang)
             jarvis_core.control_music("pause")
 
         elif action == "resume_music":
-            jarvis_core.speak("Reanudando música", lang)
+            jarvis_core.speak("Reanudando audio", lang)
             jarvis_core.control_music("resume")
 
         elif command == "salir" or command == "exit":
@@ -76,7 +119,6 @@ def process_user_command(user_text):
             sys.exit(0)
 
         else:
-            # Chat general si no es un comando de música directo
             raw_chat_response = jarvis_core.query_ollama(user_text)
             chat_data = json.loads(raw_chat_response)
             answer = chat_data.get("response", "").strip()
@@ -101,9 +143,8 @@ def process_user_command(user_text):
             jarvis_core.speak("Error al procesar la solicitud.", lang)
 
 if __name__ == "__main__":
-    print("\n[LISTENING...] Dilo diciendo 'Jarvis activar <comando>', presiona 'e' para texto o 'd' para salir.")
+    print("\n[LISTENING...] Dilo diciendo 'Jarvis activar <comando>', presiona 'e' para texto, 's' para estado de música o 'd' para salir.")
     
-    # Iniciar la escucha pasiva en segundo plano (Modo Alexa) conectada al procesador
     jarvis_core.start_listening(lambda prompt: process_user_command(prompt))
 
     try:
@@ -116,6 +157,10 @@ if __name__ == "__main__":
                     "\nEscribe tu comando para Jarvis (enter para enviarlo): "
                 ).strip()
                 process_user_command(user_text)
+
+            elif key == "s" or key == "S":
+                print("\n[TECLADO 's']: Consultando estado de la música...")
+                check_current_playback_status()
 
             elif key == "d" or key == "D":
                 print("\n[TECLADO 'd']: Cancelando todo...")

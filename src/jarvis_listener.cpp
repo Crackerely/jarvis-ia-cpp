@@ -40,8 +40,8 @@ void JarvisListener::run() {
             continue;
         }
 
-        // 1. Grabamos directamente una ventana continua de 5 segundos (captura wake word y comando juntos)
-        std::vector<int16_t> audioChunk = state_->voice.recordAudioChunk(5);
+        // 1. Grabamos directamente una ventana continua de 10 segundos (captura wake word y comando juntos)
+        std::vector<int16_t> audioChunk = state_->voice.recordAudioChunk(10);
         if (audioChunk.empty() || !isRunning_) {
             continue;
         }

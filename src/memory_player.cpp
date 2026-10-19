@@ -1,8 +1,6 @@
 #include "memory_player.h"
 #include <iostream>
-#include <thread>
 #include <curl/curl.h>
-#include <portaudio.h>
 
 extern "C" {
     #include <libavformat/avformat.h>
@@ -11,155 +9,325 @@ extern "C" {
     #include <libswresample/swresample.h>
 }
 
-MemoryMusicPlayer::MemoryMusicPlayer() {
-    avformat_network_init();
-    Pa_Initialize();
+#include <portaudio.h>
+
+MemoryMusicPlayer::MemoryMusicPlayer() 
+    : head_(nullptr), tail_(nullptr), currentSong_(nullptr),
+      isRunning_(true), isPlayingCurrent_(false), abortCurrent_(false), currentProgressSeconds_(0.0) {
+    playerThread_ = std::thread(&MemoryMusicPlayer::playerLoop, this);
 }
 
 MemoryMusicPlayer::~MemoryMusicPlayer() {
-    Pa_Terminate();
-    avformat_network_deinit();
+    stop();
+}
+
+void MemoryMusicPlayer::stop() {
+    isRunning_ = false;
+    abortCurrent_ = true;
+    buffer_.set_finished();
+    queueCv_.notify_all();
+    if (playerThread_.joinable()) {
+        playerThread_.join();
+    }
+
+    std::lock_guard<std::mutex> lock(queueMtx_);
+    SongNode* current = head_;
+    while (current != nullptr) {
+        SongNode* next = current->next;
+        delete current;
+        current = next;
+    }
+    head_ = tail_ = currentSong_ = nullptr;
+}
+
+void MemoryMusicPlayer::addSong(const std::string& title, const std::string& artist, const std::string& url, double duration) {
+    if (url.empty()) return;
+
+    SongNode* newNode = new SongNode(title, artist, url, duration);
+
+    {
+        std::lock_guard<std::mutex> lock(queueMtx_);
+        if (head_ == nullptr) {
+            head_ = tail_ = newNode;
+        } else {
+            tail_->next = newNode;
+            tail_ = newNode;
+        }
+        std::cout << "[MemoryMusicPlayer LinkedList] Canción encolada: " << title << " - " << artist << std::endl;
+    }
+    queueCv_.notify_one();
+}
+
+void MemoryMusicPlayer::playNow(const std::string& title, const std::string& artist, const std::string& url, double duration) {
+    if (url.empty()) return;
+
+    SongNode* newNode = new SongNode(title, artist, url, duration);
+
+    {
+        std::lock_guard<std::mutex> lock(queueMtx_);
+        SongNode* current = head_;
+        while (current != nullptr) {
+            SongNode* next = current->next;
+            delete current;
+            current = next;
+        }
+        head_ = tail_ = newNode;
+    }
+    
+    abortCurrent_ = true;
+    buffer_.set_finished();
+    queueCv_.notify_all();
+}
+
+bool MemoryMusicPlayer::isPlayingOrQueued() {
+    std::lock_guard<std::mutex> lock(queueMtx_);
+    return isPlayingCurrent_ || (head_ != nullptr);
+}
+
+int MemoryMusicPlayer::getQueueSize() {
+    std::lock_guard<std::mutex> lock(queueMtx_);
+    int count = 0;
+    SongNode* current = head_;
+    while (current != nullptr) {
+        count++;
+        current = current->next;
+    }
+    return count;
+}
+
+std::string MemoryMusicPlayer::getCurrentSongTitle() {
+    std::lock_guard<std::mutex> lock(queueMtx_);
+    return currentSong_ ? currentSong_->title : "";
+}
+
+std::string MemoryMusicPlayer::getCurrentSongArtist() {
+    std::lock_guard<std::mutex> lock(queueMtx_);
+    return currentSong_ ? currentSong_->artist : "";
+}
+
+double MemoryMusicPlayer::getCurrentSongProgress() {
+    std::lock_guard<std::mutex> lock(queueMtx_);
+    return currentProgressSeconds_;
+}
+
+double MemoryMusicPlayer::getCurrentSongDuration() {
+    std::lock_guard<std::mutex> lock(queueMtx_);
+    return currentSong_ ? currentSong_->durationSeconds : 0.0;
+}
+
+void MemoryMusicPlayer::playerLoop() {
+    while (isRunning_) {
+        SongNode* songToPlay = nullptr;
+
+        {
+            std::unique_lock<std::mutex> lock(queueMtx_);
+            queueCv_.wait(lock, [this]() {
+                return head_ != nullptr || !isRunning_;
+            });
+
+            if (!isRunning_) break;
+
+            if (head_ != nullptr) {
+                songToPlay = head_;
+                head_ = head_->next;
+                if (head_ == nullptr) {
+                    tail_ = nullptr;
+                }
+                currentSong_ = songToPlay;
+            }
+        }
+
+        if (songToPlay != nullptr) {
+            isPlayingCurrent_ = true;
+            abortCurrent_ = false;
+            
+            {
+                std::lock_guard<std::mutex> lock(queueMtx_);
+                currentProgressSeconds_ = 0.0;
+            }
+
+            playStreamInternal(songToPlay);
+
+            delete songToPlay;
+            {
+                std::lock_guard<std::mutex> lock(queueMtx_);
+                currentSong_ = nullptr;
+            }
+            isPlayingCurrent_ = false;
+        }
+    }
 }
 
 size_t MemoryMusicPlayer::curlWriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
+    AudioBuffer* buf = static_cast<AudioBuffer*>(userp);
     size_t totalSize = size * nmemb;
-    AudioBuffer* buffer = static_cast<AudioBuffer*>(userp);
-    buffer->append(static_cast<uint8_t*>(contents), totalSize);
+    buf->append(static_cast<const uint8_t*>(contents), totalSize);
     return totalSize;
 }
 
 int MemoryMusicPlayer::ffmpegReadPacket(void* opaque, uint8_t* buf, int buf_size) {
-    AudioBuffer* buffer = static_cast<AudioBuffer*>(opaque);
-    size_t bytesRead = buffer->read(buf, buf_size);
+    AudioBuffer* audioBuf = static_cast<AudioBuffer*>(opaque);
+    size_t bytesRead = audioBuf->read(buf, buf_size);
     if (bytesRead == 0) {
         return AVERROR_EOF;
     }
     return static_cast<int>(bytesRead);
 }
 
-bool MemoryMusicPlayer::playStream(const std::string& audioUrl) {
-    // Asegurar que el buffer esté limpio antes de empezar una nueva descarga
+bool MemoryMusicPlayer::playStreamInternal(SongNode* song) {
     buffer_.clear();
 
-    // 1. Iniciar la descarga en segundo plano mediante un thread independiente
-    std::thread downloadThread([this, audioUrl]() {
-        CURL* curl = curl_easy_init();
-        if (curl) {
-            curl_easy_setopt(curl, CURLOPT_URL, audioUrl.c_str());
-            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlWriteCallback);
-            curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer_);
-            curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-            curl_easy_perform(curl);
-            curl_easy_cleanup(curl);
-        }
-        buffer_.set_finished();
+    CURL* curl = curl_easy_init();
+    if (!curl) return false;
+
+    curl_easy_setopt(curl, CURLOPT_URL, song->url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlWriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer_);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+
+    CURLcode* curlResPtr = new CURLcode(CURLE_OK);
+    std::thread downloadThread([curl, curlResPtr]() {
+        *curlResPtr = curl_easy_perform(curl);
+        curl_easy_cleanup(curl);
     });
 
-    // 2. Configurar el buffer de E/S personalizado de FFmpeg (AVIOContext)
-    const int avioBufferSize = 4096;
-    unsigned char* avioBuffer = static_cast<unsigned char*>(av_malloc(avioBufferSize));
-    AVIOContext* pIoContext = avio_alloc_context(
-        avioBuffer, avioBufferSize, 0, &buffer_, 
-        &MemoryMusicPlayer::ffmpegReadPacket, nullptr, nullptr
-    );
-
-    if (!pIoContext) {
+    const int bufferSize = 4096;
+    unsigned char* avioBuffer = static_cast<unsigned char*>(av_malloc(bufferSize));
+    if (!avioBuffer) {
+        buffer_.set_finished();
         downloadThread.join();
-        buffer_.clear();
+        delete curlResPtr;
         return false;
     }
 
-    AVFormatContext* pFormatContext = avformat_alloc_context();
-    pFormatContext->pb = pIoContext;
-
-    if (avformat_open_input(&pFormatContext, nullptr, nullptr, nullptr) < 0) {
-        std::cerr << "[Error] No se pudo abrir el stream a partir de la memoria." << std::endl;
-        avformat_free_context(pFormatContext);
-        avio_context_free(&pIoContext);
+    AVIOContext* avioCtx = avio_alloc_context(avioBuffer, bufferSize, 0, &buffer_, ffmpegReadPacket, nullptr, nullptr);
+    if (!avioCtx) {
+        av_freep(&avioBuffer);
+        buffer_.set_finished();
         downloadThread.join();
-        buffer_.clear();
+        delete curlResPtr;
         return false;
     }
 
-    if (avformat_find_stream_info(pFormatContext, nullptr) < 0) {
-        avformat_close_input(&pFormatContext);
+    AVFormatContext* fmtCtx = avformat_alloc_context();
+    if (!fmtCtx) {
+        avio_context_free(&avioCtx);
+        buffer_.set_finished();
         downloadThread.join();
-        buffer_.clear();
+        delete curlResPtr;
+        return false;
+    }
+
+    fmtCtx->pb = avioCtx;
+
+    if (avformat_open_input(&fmtCtx, nullptr, nullptr, nullptr) < 0) {
+        avformat_free_context(fmtCtx);
+        avio_context_free(&avioCtx);
+        buffer_.set_finished();
+        downloadThread.join();
+        delete curlResPtr;
+        return false;
+    }
+
+    if (avformat_find_stream_info(fmtCtx, nullptr) < 0) {
+        avformat_close_input(&fmtCtx);
+        avio_context_free(&avioCtx);
+        downloadThread.join();
+        delete curlResPtr;
         return false;
     }
 
     int audioStreamIdx = -1;
-    for (unsigned int i = 0; i < pFormatContext->nb_streams; i++) {
-        if (pFormatContext->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
-            audioStreamIdx = (int)i;
+    for (unsigned int i = 0; i < fmtCtx->nb_streams; i++) {
+        if (fmtCtx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+            audioStreamIdx = i;
             break;
         }
     }
 
     if (audioStreamIdx == -1) {
-        avformat_close_input(&pFormatContext);
+        avformat_close_input(&fmtCtx);
+        avio_context_free(&avioCtx);
         downloadThread.join();
-        buffer_.clear();
+        delete curlResPtr;
         return false;
     }
 
-    AVCodecParameters* pCodecParams = pFormatContext->streams[audioStreamIdx]->codecpar;
-    const AVCodec* pCodec = avcodec_find_decoder(pCodecParams->codec_id);
-    AVCodecContext* pCodecCtx = avcodec_alloc_context3(pCodec);
-    avcodec_parameters_to_context(pCodecCtx, pCodecParams);
-    avcodec_open2(pCodecCtx, pCodec, nullptr);
+    AVCodecParameters* codecpar = fmtCtx->streams[audioStreamIdx]->codecpar;
+    const AVCodec* codec = avcodec_find_decoder(codecpar->codec_id);
+    if (!codec) {
+        avformat_close_input(&fmtCtx);
+        avio_context_free(&avioCtx);
+        downloadThread.join();
+        delete curlResPtr;
+        return false;
+    }
 
-    // 3. Inicializar PortAudio para la reproducción en tiempo real
-    PaStream* paStream = nullptr;
-    Pa_OpenDefaultStream(&paStream, 0, pCodecCtx->ch_layout.nb_channels, paFloat32, 
-                         pCodecCtx->sample_rate ? pCodecCtx->sample_rate : 44100, 1024, nullptr, nullptr);
-    Pa_StartStream(paStream);
+    AVCodecContext* codecCtx = avcodec_alloc_context3(codec);
+    avcodec_parameters_to_context(codecCtx, codecpar);
+    avcodec_open2(codecCtx, codec, nullptr);
 
-    AVPacket* packet = av_packet_alloc();
-    AVFrame* frame = av_frame_alloc();
+    PaStream* stream = nullptr;
+    Pa_OpenDefaultStream(&stream, 0, codecCtx->ch_layout.nb_channels, paInt16, codecCtx->sample_rate, 512, nullptr, nullptr);
+    Pa_StartStream(stream);
 
     SwrContext* swrCtx = nullptr;
-    AVChannelLayout out_ch_layout = {};
-    av_channel_layout_default(&out_ch_layout, pCodecCtx->ch_layout.nb_channels);
-    swr_alloc_set_opts2(&swrCtx, &out_ch_layout, AV_SAMPLE_FMT_FLT, pCodecCtx->sample_rate,
-                        &pCodecCtx->ch_layout, pCodecCtx->sample_fmt, pCodecCtx->sample_rate, 0, nullptr);
+    swr_alloc_set_opts2(&swrCtx,
+        &codecCtx->ch_layout, AV_SAMPLE_FMT_S16, codecCtx->sample_rate,
+        &codecCtx->ch_layout, codecCtx->sample_fmt, codecCtx->sample_rate,
+        0, nullptr);
     swr_init(swrCtx);
 
-    // 4. Bucle principal de decodificación y reproducción simultánea
-    while (av_read_frame(pFormatContext, packet) >= 0) {
-        if (packet->stream_index == audioStreamIdx) {
-            int ret = avcodec_send_packet(pCodecCtx, packet);
-            if (ret >= 0) {
-                while (avcodec_receive_frame(pCodecCtx, frame) >= 0) {
-                    float* outBuffer = nullptr;
-                    av_samples_alloc(reinterpret_cast<uint8_t**>(&outBuffer), nullptr, 
-                                     pCodecCtx->ch_layout.nb_channels, frame->nb_samples, AV_SAMPLE_FMT_FLT, 0);
-                    
-                    swr_convert(swrCtx, reinterpret_cast<uint8_t**>(&outBuffer), frame->nb_samples,
-                                const_cast<const uint8_t**>(frame->data), frame->nb_samples);
+    AVPacket* pkt = av_packet_alloc();
+    AVFrame* frame = av_frame_alloc();
+    int sampleRate = codecCtx->sample_rate;
 
-                    Pa_WriteStream(paStream, outBuffer, frame->nb_samples);
-                    av_freep(&outBuffer);
+    while (isRunning_ && !abortCurrent_ && av_read_frame(fmtCtx, pkt) >= 0) {
+        if (pkt->stream_index == audioStreamIdx) {
+            int ret = avcodec_send_packet(codecCtx, pkt);
+            if (ret >= 0) {
+                while (isRunning_ && !abortCurrent_ && avcodec_receive_frame(codecCtx, frame) >= 0) {
+                    int outLinesize = 0;
+                    uint8_t* outBuffer = nullptr;
+                    int maxDstSamples = av_rescale_rnd(swr_get_delay(swrCtx, sampleRate) + frame->nb_samples, sampleRate, sampleRate, AV_ROUND_UP);
+                    
+                    av_samples_alloc(&outBuffer, &outLinesize, codecCtx->ch_layout.nb_channels, maxDstSamples, AV_SAMPLE_FMT_S16, 0);
+                    int convertedSamples = swr_convert(swrCtx, &outBuffer, maxDstSamples, (const uint8_t**)frame->data, frame->nb_samples);
+
+                    if (convertedSamples > 0) {
+                        Pa_WriteStream(stream, outBuffer, convertedSamples);
+                        
+                        // Actualización de progreso protegida por mutex
+                        {
+                            std::lock_guard<std::mutex> lock(queueMtx_);
+                            currentProgressSeconds_ += static_cast<double>(convertedSamples) / sampleRate;
+                        }
+                    }
+                    if (outBuffer) {
+                        av_freep(&outBuffer);
+                    }
                 }
             }
         }
-        av_packet_unref(packet);
+        av_packet_unref(pkt);
     }
 
-    // 5. Limpieza y liberación absoluta de recursos y memoria RAM
-    Pa_StopStream(paStream);
-    Pa_CloseStream(paStream);
-    swr_free(&swrCtx);
-    av_frame_free(&frame);
-    av_packet_free(&packet);
-    avcodec_free_context(&pCodecCtx);
-    avformat_close_input(&pFormatContext); // Esto también libera el avioContext y su buffer interno asignado con av_malloc
-    
+    buffer_.set_finished();
     downloadThread.join();
 
-    // Liberar explícitamente el buffer de datos descargados de la canción reproducida
-    buffer_.clear();
+    if (stream) {
+        Pa_StopStream(stream);
+        Pa_CloseStream(stream);
+    }
 
-    std::cout << "[MemoryMusicPlayer SUCCESS] Reproducción finalizada y memoria RAM liberada." << std::endl;
+    av_packet_free(&pkt);
+    av_frame_free(&frame);
+    avcodec_free_context(&codecCtx);
+    avformat_close_input(&fmtCtx);
+    avio_context_free(&avioCtx);
+    swr_free(&swrCtx);
+    delete curlResPtr;
+
     return true;
 }

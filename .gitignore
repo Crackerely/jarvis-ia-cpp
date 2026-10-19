@@ -6,3 +6,4 @@ jarvis_core
 .venv
 *.log
 *.old*
+embed_debug.json
